@@ -1,0 +1,304 @@
+---
+params:
+  seurat: "/home/adampelletier/Documents/AWS_pipelines/nextflow/spatial_downstream/results/NHP_lung/seurat/seurat_integrated.RDS"
+  pipeline: "rna"
+  integrate_datasets: true
+  clustering_res: 0.8
+  outcomes: "none"
+
+---
+
+# Clustering
+
+```{r setup, warning=F, message=F, echo=knitr::is_html_output(), eval=T}
+
+selected_packages <- c("Seurat",
+                       'tidyverse',
+                       'readxl',
+                       'patchwork',
+                       'clustree', 
+                       'DT',
+                       'ggpubr',
+                       'Rfast2',
+                       'future')
+#invisible(extrafont::font_import(prompt = F))
+selected_font <- "Arial"
+selected_font_pdf <- "ArialMT"
+#extrafont::loadfonts(device = "win")
+invisible(lapply(selected_packages, library, character.only = TRUE))
+
+if(knitr::is_html_output()){
+  eval_set <- TRUE
+  eval_pdf <- FALSE
+  echo_set <- TRUE
+  message_set <- FALSE
+} else {
+  eval_set <- FALSE
+  eval_pdf <- TRUE
+  echo_set <- FALSE
+  message_set <- FALSE
+}
+plan('multicore')
+source("run_funcs.R")
+
+options(future.globals.maxSize = 8000 * 1024^2)
+knitr::opts_chunk$set(echo = echo_set,  warning = FALSE, message = FALSE, fig.align = "center", eval = params$eval, fig.width = 10, cache.lazy = F)
+
+```
+
+```{r echo=F}
+
+run_gex <- TRUE
+
+run_adt <- FALSE
+
+multimodal <- FALSE
+
+
+if(params$pipeline == "rna"){
+  reduction_sel <- 'umap.rna'
+  clust_reduction <- 'pca'
+  if(params$integrate_datasets){
+    reduction_sel <- 'umap.rna.int'
+    clust_reduction <- 'integrated.rna'
+  }
+}
+
+if(params$pipeline == "cite"){
+  multimodal <- TRUE
+  run_adt <- TRUE
+  reduction_sel <- "wnn.umap"
+  clust_reduction <- 'weighted.nn'
+}
+
+
+```
+
+## Analysis Parameters
+```{r echo=FALSE}
+
+df <- params_to_df(params)
+df
+```
+
+### Load Data
+```{r }
+seurat <- readRDS(params$seurat)
+
+```
+
+
+## Clustering Tree
+Clustering is performed at different resolutions. 
+A clustering tree is then produced to evaluate which clustering resolution best captures the data, to avoid over- or under-clustering it. 
+Good clusters are stable across a few resolutions. More information can be [found here](https://cran.r-project.org/web/packages/clustree/vignettes/clustree.html)
+
+```{r eval=multimodal, echo=multimodal & echo_set, fig.height=12}
+seurat <- FindClusters(seurat, graph.name = "wsnn", algorithm = 1, verbose = FALSE, resolution = seq(0.1, 1.2, by = 0.1))
+
+
+
+clustree_wNN <- clustree(seurat, prefix = "wsnn_res.") 
+## Optimal res at 0.3
+clustree_wNN <- clustree_arrow(clustree_wNN, selected_res = params$clustering_res)
+clustree_wNN
+
+
+select_clust_res <- setNames(seurat[[paste0("wsnn_res.", params$clustering_res)]][,1],colnames(seurat))
+
+
+seurat$seurat_clusters <- select_clust_res
+seurat$seurat_clusters <- factor(seurat$seurat_clusters, 
+                                 levels = gtools::mixedsort(levels(seurat$seurat_clusters)))
+Idents(seurat) <- "seurat_clusters"
+
+```
+
+```{r eval=multimodal, echo=multimodal & echo_set, fig.height=6, fig.width=7}
+
+
+DimPlot(seurat, group.by = "seurat_clusters", reduction = reduction_sel, raster = T )
+
+```
+
+```{r eval=params$pipeline == 'rna', echo=params$pipeline == 'rna' & echo_set}
+
+
+seurat <- FindClusters(seurat, verbose = FALSE, resolution = seq(0.1, 1.2, by = 0.1), algorithm = 1)
+
+clustree_wNN <- clustree(seurat, prefix = "SCT_snn_res.") 
+## Optimal res at 0.3
+clustree_wNN <- clustree_arrow(clustree_wNN, selected_res = params$clustering_res)
+clustree_wNN
+
+select_clust_res <- setNames(seurat[[paste0("SCT_snn_res.", params$clustering_res)]][,1],colnames(seurat))
+
+seurat$seurat_clusters <- select_clust_res
+Idents(seurat) <- "seurat_clusters"
+
+
+
+DimPlot(seurat, group.by = "seurat_clusters", reduction = reduction_sel, raster = T )
+
+
+
+```
+
+```{r fig.height=9}
+for(x in names(seurat@images)){
+  leg <- ggpubr::get_legend(DimPlot(seurat, group.by = "seurat_clusters"))
+  p1 <- SpatialDimPlot(seurat, group.by = "seurat_clusters", alpha = 1, images = x, pt.size.factor = 2)  + theme(legend.position = "none") 
+  p2 <- SpatialDimPlot(seurat, group.by = "seurat_clusters", alpha = 0, images = x, pt.size.factor = 2)  + theme(legend.position = "none") + ggtitle(x)
+  p <- ggarrange( p2, p1, ncol = 2, legend.grob = leg, legend = "right") 
+  print(p)
+}
+
+```
+
+
+## Cluster markers
+`r if(run_gex){"### RNA Markers"}`
+```{r eval=run_gex, echo=run_gex & echo_set}
+DefaultAssay(seurat) <- 'SCT'
+
+
+if(length(seurat@assays$SCT@SCTModel.list) == 2){
+  slot(object = seurat@assays$SCT@SCTModel.list[[2]], name="umi.assay")<-"Spatial"
+} else {
+  for(i in seq(2,length(seurat@assays$SCT@SCTModel.list))){
+    slot(object = seurat@assays$SCT@SCTModel.list[[i]], name="umi.assay")<-"Spatial"
+  }
+}
+
+seurat <- PrepSCTFindMarkers(seurat, assay = "SCT")
+rna_markers <- FindAllMarkers(seurat, only.pos = T, 
+                              test.use = 'wilcox',
+                              logfc.threshold = 0.05,
+                              min.pct = 0.01) %>%
+                dplyr::filter(avg_log2FC > 1) %>%
+                dplyr::filter(p_val_adj < 0.01)
+
+top_rna_markers <- rna_markers %>%
+                  group_by(cluster) %>%
+                  slice_max(., order_by = avg_log2FC, n = 10) %>%
+                  ungroup()
+
+
+
+if(knitr::is_html_output()){
+  datatable(rna_markers,
+                        caption = "RNA Modality cluster markers",
+                        extensions = 'Buttons',
+                          options = list(dom = 'lfrtpB',
+                                         buttons = list(
+                                                      list(extend = 'csv', title = "RNA_cluster_markers"),
+                                                      list(extend = 'excel', title = "RNA_cluster_markers")),
+                                         lengthMenu = list(c(10,25,50,-1),
+                                                           c(10,25,50,"All")))) %>%
+                    formatSignif(columns = c("p_val", "p_val_adj"), digits = 3 ) %>%
+                    formatRound(columns = c("avg_log2FC", "pct.1", "pct.2"), digits = 3)
+  
+  
+} else {
+  knitr::kable(top_rna_markers)
+}
+
+```
+
+
+```{r eval=run_gex, echo=run_gex & echo_set, fig.height=10, fig.width=10}
+
+p <- DoHeatmap(seurat, features = unique(top_rna_markers$gene), raster = T) + NoLegend()
+
+
+hm_filename <- "cluster_markers_rna_heatmap.jpeg"
+ggsave(p, filename = hm_filename, device = "jpeg", dpi = 300, units = "in")
+
+p
+
+
+```
+
+
+`r if(run_adt){"### Protein Markers"}`
+```{r eval=run_adt, echo=run_adt & echo_set}
+DefaultAssay(seurat) <- 'ADT'
+
+adt_markers <- FindAllMarkers(seurat, only.pos = T, test.use = 'wilcox',
+                              logfc.threshold = 0.05,
+                              min.pct = 0.01) %>%
+                dplyr::filter(avg_log2FC > 1) %>%
+                dplyr::filter(p_val_adj < 0.01)
+
+top_adt_markers <- adt_markers %>%
+                  group_by(cluster) %>%
+                  slice_max(., order_by = avg_log2FC, n = 10) %>%
+                  ungroup()
+
+
+
+if(knitr::is_html_output()){
+  datatable(adt_markers,
+                        caption = "ADT Modality cluster markers",
+                        extensions = 'Buttons',
+                          options = list(dom = 'lfrtpB',
+                                         buttons = list(
+                                                      list(extend = 'csv', title = "ADT_cluster_markers"),
+                                                      list(extend = 'excel', title = "ADT_cluster_markers")),
+                                         lengthMenu = list(c(10,25,50,-1),
+                                                           c(10,25,50,"All")))) %>%
+                    formatSignif(columns = c("p_val", "p_val_adj"), digits = 3 ) %>%
+                    formatRound(columns = c("avg_log2FC", "pct.1", "pct.2"), digits = 3)
+  
+  
+} else {
+  knitr::kable(top_adt_markers)
+}
+
+
+p <- DoHeatmap(seurat, features = unique(top_adt_markers$gene), raster = T) + NoLegend()
+
+hm_filename <- "cluster_markers_adt_heatmap.jpeg"
+ggsave(p, filename = hm_filename, device = "jpeg", dpi = 300, units = "in")
+
+p
+
+
+```
+
+## Cluster frequencies
+```{r }
+if(params$outcomes == "none"){
+  cluster_df <- compute_ident_frequencies(seurat)
+  cluster_p <- cluster_frequency_plot(seurat)
+} else {
+  cluster_df <- compute_ident_frequencies(seurat, outcomes = params$outcomes)
+  cluster_p <- cluster_frequency_plot(seurat, split.by = params$outcomes)
+}
+
+
+if(knitr::is_html_output()){
+  datatable(cluster_df,
+                        caption = "Cluster frequencies per sample",
+                        extensions = 'Buttons',
+                          options = list(dom = 'lfrtpB',
+                                         buttons = list(
+                                                      list(extend = 'csv', title = "cluster_frequencies_per_sample"),
+                                                      list(extend = 'excel', title = "cluster_frequencies_per_sample")),
+                                         lengthMenu = list(c(10,25,50,-1),
+                                                           c(10,25,50,"All")))) %>%
+                    formatRound(columns = c("relative_frequency"), digits = 3)
+  
+  
+} 
+
+cluster_p
+
+```
+
+
+
+```{r }
+saveRDS(seurat, file = "seurat_clustered.RDS")
+
+```

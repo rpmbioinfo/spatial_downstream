@@ -1,0 +1,33 @@
+---
+title: "package_project_info"
+output: html_document
+date: "2024-07-29"
+params:
+    description_section: "Generic project description"
+    data_section: "Generic data section"
+    objective_section: "Generic objectives"
+    project_title: "Generic project title"
+---
+
+```{r setup, include=FALSE}
+
+suppressPackageStartupMessages(library(yaml))
+
+
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+
+
+
+```{r }
+
+
+
+proj <- params
+class(proj) <- "list"
+
+write_yaml(proj, "project.yml")
+
+
+```

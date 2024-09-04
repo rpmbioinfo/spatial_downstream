@@ -1,0 +1,62 @@
+---
+title: "create_seurat"
+output: html_document
+date: "2024-07-29"
+params:
+  pipeline: "rna"
+  sample: "test"
+---
+
+```{r setup, include=FALSE}
+
+suppressPackageStartupMessages(library(Seurat))
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(Signac))
+
+
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+
+
+
+```{r }
+
+
+create_seurat_object <- function(h5,
+                                 sample = params$sample,
+                                 pipeline, 
+                                 annotation){
+  tmp <- Load10X_Spatial(filename = h5,
+                            data.dir = "/home/data",
+                         slice = sample)
+  
+  tmp$SampleID <- sample
+  return(tmp)
+  
+}
+
+
+
+
+
+```
+
+
+```{r }
+
+raw_h5_file <- "raw_feature_bc_matrix.h5"
+filtered_h5_file <- "filtered_feature_bc_matrix.h5"
+seurat_raw <- create_seurat_object(raw_h5_file,
+                           pipeline = params$pipeline)
+
+seurat_filt <- create_seurat_object(filtered_h5_file,
+                           pipeline = params$pipeline)
+  
+
+
+saveRDS(seurat_raw, paste0(params$sample, "_raw_counts_seurat.RDS"))
+saveRDS(seurat_filt, paste0(params$sample, "_filtered_counts_seurat.RDS"))
+
+
+```

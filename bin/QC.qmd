@@ -1,0 +1,278 @@
+---
+params:
+  eval: true
+  pipeline: "rna"
+  metadata: "/home/adampelletier/Documents/RPM_Bioinfo_scripts/Ashish/hadiya_visium/mtb_visium/mtb_visium_metadata.xlsx"
+  genome: "GRCh38"
+  nCount_Spatial_min: 1000
+  nCount_Spatial_max: 25000
+  nFeature_Spatial_min: 1000
+  nFeature_Spatial_max: 2500
+  sample_exclusion: ""
+---
+
+
+# Quality Control
+```{r setup, warning=F, message=F, echo=knitr::is_html_output(), eval=T}
+
+selected_packages <- c("Seurat",
+                       "biovizBase",
+                       'tidyverse',
+                       'readxl')
+#invisible(extrafont::font_import(prompt = F))
+selected_font <- "Arial"
+selected_font_pdf <- "ArialMT"
+#extrafont::loadfonts(device = "win")
+invisible(lapply(selected_packages, library, character.only = TRUE))
+
+
+if(knitr::is_html_output()){
+  eval_set <- TRUE
+  eval_pdf <- FALSE
+  echo_set <- TRUE
+  message_set <- FALSE
+} else {
+  eval_set <- FALSE
+  eval_pdf <- TRUE
+  echo_set <- FALSE
+  message_set <- FALSE
+}
+
+source("run_funcs.R")
+
+plotLS <- list()
+
+
+knitr::opts_chunk$set(echo = echo_set,  warning = FALSE, message = FALSE, fig.align = "center", eval = params$eval, fig.width=9)
+
+```
+
+```{r echo=F}
+
+run_gex <- TRUE
+run_adt <- FALSE
+
+
+if(params$pipeline == "cite"){
+  run_adt <- TRUE
+}
+
+```
+
+## Analysis Parameters
+```{r echo=FALSE}
+
+df <- params_to_df(params)
+
+df
+```
+
+## Load Data
+
+```{r sample_LS}
+sample_LS <- list.files(pattern = "*_counts_seurat.RDS")
+#sample_LS <- list.files(pattern = ".*filtered_counts_seurat.RDS", path = "../results/NHP_lung/seurat/", full.names = T)[c(1,2)]
+
+seurat_ls <- lapply(sample_LS, function(x){
+  tmp <- readRDS(x)
+  
+})
+
+seurat <- merge(seurat_ls[[1]], y = seurat_ls[-1])
+rm(seurat_ls)
+
+seurat <- JoinLayers(seurat)
+
+
+```
+
+
+## Load Sample Metadata
+```{r }
+ext <- tools::file_ext(params$metadata)
+
+if(ext %in% c("xls", "xlsx")){
+  meta_df <- readxl::read_excel(params$metadata)
+} else if(ext == "csv"){
+  meta_df <- readr::read_csv(params$metadata)
+} else if(ext == "tsv"){
+  meta_df <- readr::read_tsv(params$metadata)
+} else {
+  stop("Metadata is not in a valid format. Provide a CSV, TSV or Excel file for metadata")
+}
+
+
+if("SampleID" %in% colnames(meta_df)){
+  if(length(setdiff(unique(seurat$SampleID), meta_df$SampleID)) == 0){
+      tmp_meta <- seurat@meta.data %>%
+              rownames_to_column("cell") %>%
+              dplyr::select(cell, SampleID) %>%
+              left_join(meta_df, by = "SampleID") %>%
+              column_to_rownames("cell")
+    seurat <- AddMetaData(seurat, metadata = tmp_meta)
+  } else {
+    stop("Metadata does not contain rows for all SampleIDs found in the Seurat object.")
+  }
+
+} else {
+  stop("Metadata does not contain a 'SampleID' column to merge with the Seurat object")
+}
+
+meta_df <- meta_df %>%
+          dplyr::filter(SampleID %in% unique(seurat$SampleID))
+knitr::kable(meta_df)
+
+```
+
+## Gene Expression metrics
+
+```{r gex_qc, eval=run_gex, echo=run_gex & echo_set, message=FALSE, fig.height=9}
+
+
+
+DefaultAssay(seurat) <- "Spatial"
+
+
+
+log_qc <- c("nCount_Spatial", "nFeature_Spatial")
+
+
+
+qc_metric_plots <- sapply(log_qc, simplify = F, USE.NAMES = T, function(x){
+    p <- VlnPlot(seurat, features = x, ncol = 1,
+          log = T, pt.size = 0, group.by = "SampleID" ) + NoLegend()
+    
+})
+
+
+
+qc_thresholds <- list("nCount_Spatial" = list("upper" = params$nCount_Spatial_max, 'lower' = params$nCount_Spatial_min),
+                      "nFeature_Spatial" = list("upper" = params$nFeature_Spatial_max, "lower" = params$nFeature_Spatial_min))
+
+qc_titles <-     list("nCount_Spatial" = "Number of reads per spot",
+                      "nFeature_Spatial" = "Number of genes quantified per spot")
+
+
+
+
+for(i in names(qc_thresholds)){
+  for(j in names(qc_thresholds[[i]])){
+    if(j == "upper"){
+      lincol <- "darkgreen"
+      
+    } else {
+      lincol <- "red"
+    }
+    qc_metric_plots[[i]] <- qc_metric_plots[[i]] + geom_hline(yintercept = qc_thresholds[[i]][[j]], lty = 2, color = lincol) 
+  }
+  qc_metric_plots[[i]] <- qc_metric_plots[[i]] + ggtitle(qc_titles[[i]])
+}
+
+```
+
+
+### Number of counts per spot (RNA)
+
+```{r fig.height=7}
+qc_metric_plots$nCount_Spatial
+
+
+```
+
+
+```{r fig.width=12, fig.height=8}
+for(x in split(names(seurat@images), ceiling(seq_along(names(seurat@images))/ 2))){
+  print(SpatialFeaturePlot(seurat, images = x, features = "nCount_Spatial", max.cutoff = "q95", min.cutoff = "q5", pt.size.factor = 2))
+  
+}
+
+
+```
+
+
+### Number of features per spot (RNA)
+
+```{r fig.height=7}
+qc_metric_plots$nFeature_Spatial
+
+```
+
+
+```{r fig.width=12, fig.height=8}
+for(x in split(names(seurat@images), ceiling(seq_along(names(seurat@images))/ 2))){
+  print(SpatialFeaturePlot(seurat, images = x, features = "nFeature_Spatial", max.cutoff = "q95", min.cutoff = "q5", pt.size.factor = 2))
+  
+}
+
+```
+
+
+```{r echo=F}
+if(length(intersect(params$sample_exclusion, unique(seurat$SampleID))) == 0 ){
+  filter_blurb <- "\nNo samples were excluded from the analysis"
+} else {
+  filter_blurb <- paste0("\nSamples *", paste(params$sample_exclusion, collapse = "*;*"), "* were excluded from the analysis")
+}
+
+filter_blurb_final <- paste0("## Filter bad spots and suboptimal samples", filter_blurb)
+```
+
+`r filter_blurb_final`
+```{r }
+upper_bounds <- list()
+lower_bounds <- list()
+
+
+for(j in names(qc_thresholds)){
+
+   for(k in names(qc_thresholds[[j]])){
+     if(k == "upper"){
+       if(qc_thresholds[[j]][[k]] != 0){
+         tmp <- list(qc_thresholds[[j]][[k]])
+         names(tmp) <- j
+         upper_bounds <- c(upper_bounds, tmp)
+       }
+       
+     } else if(k == "lower"){
+       if(qc_thresholds[[j]][[k]] != 0){
+         tmp <- list(qc_thresholds[[j]][[k]])
+         names(tmp) <- j
+         lower_bounds <- c(lower_bounds, tmp)
+       }
+       
+     }
+   }
+
+}
+
+
+for(i in names(upper_bounds)){
+  expr <- FetchData(seurat, vars = i)
+  seurat <- seurat[,which(expr < upper_bounds[[i]])]
+}
+
+for(i in names(lower_bounds)){
+  expr <- FetchData(seurat, vars = i)
+  seurat <- seurat[,which(expr > lower_bounds[[i]])]
+}
+
+sample_exclusion <- unlist(params$sample_exclusion)
+sample_exclusion_logical <- !is.null(sample_exclusion)
+
+```
+
+```{r sample_exclusion, eval=sample_exclusion_logical, echo=sample_exclusion_logical & echo_set, message=FALSE}
+
+
+seurat <- seurat[, !(seurat$SampleID %in% sample_exclusion)]
+
+
+```
+
+
+
+```{r }
+
+
+saveRDS(seurat, "seurat_after_qc.RDS")
+```

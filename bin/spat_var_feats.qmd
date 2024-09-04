@@ -1,0 +1,155 @@
+---
+params:
+  seurat: "/home/adampelletier/Documents/AWS_pipelines/nextflow/spatial_downstream/results/NHP_lung/seurat/seurat_clustered.RDS"
+  pipeline: "rna"
+  integrate_datasets: true
+  selected_var_features: ['IDO1', 'CD74', 'MMP9', 'MMP1', 'MMP2', 'COL1A1']
+
+---
+
+# Spatially Variables Feature Isolation
+
+```{r setup, warning=F, message=F, echo=knitr::is_html_output(), eval=T}
+
+selected_packages <- c("Seurat",
+                       'tidyverse',
+                       'readxl',
+                       'patchwork',
+                       'clustree', 
+                       'DT',
+                       'ggpubr',
+                       'Rfast2',
+                       'future')
+#invisible(extrafont::font_import(prompt = F))
+selected_font <- "Arial"
+selected_font_pdf <- "ArialMT"
+#extrafont::loadfonts(device = "win")
+invisible(lapply(selected_packages, library, character.only = TRUE))
+
+if(knitr::is_html_output()){
+  eval_set <- TRUE
+  eval_pdf <- FALSE
+  echo_set <- TRUE
+  message_set <- FALSE
+} else {
+  eval_set <- FALSE
+  eval_pdf <- TRUE
+  echo_set <- FALSE
+  message_set <- FALSE
+}
+plan('multicore')
+source("run_funcs.R")
+
+options(future.globals.maxSize = 8000 * 1024^2)
+knitr::opts_chunk$set(echo = echo_set,  warning = FALSE, message = FALSE, fig.align = "center", eval = params$eval, fig.width = 10, cache.lazy = F)
+
+```
+
+```{r echo=F}
+
+run_gex <- TRUE
+
+run_adt <- FALSE
+
+multimodal <- FALSE
+
+
+if(params$pipeline == "rna"){
+  reduction_sel <- 'umap.rna'
+  clust_reduction <- 'pca'
+  if(params$integrate_datasets){
+    reduction_sel <- 'umap.rna.int'
+    clust_reduction <- 'integrated.rna'
+  }
+}
+
+if(params$pipeline == "cite"){
+  multimodal <- TRUE
+  run_adt <- TRUE
+  reduction_sel <- "wnn.umap"
+  clust_reduction <- 'weighted.nn'
+}
+
+
+```
+
+## Analysis Parameters
+```{r echo=FALSE}
+
+df <- params_to_df(params)
+df
+```
+
+## Load Data
+```{r }
+seurat <- readRDS(params$seurat)
+
+```
+
+## Identify Spatially variable features
+```{r }
+DefaultAssay(seurat) <- "SCT"
+
+
+spat_var_feats <- do.call("rbind",lapply(unique(seurat$SampleID), function(x){
+  sub_seurat <- subset(seurat, subset = SampleID == x)
+  
+  sub_seurat <- FindSpatiallyVariableFeatures(sub_seurat, assay = "SCT", 
+                                        slot = "scale.data", 
+                                        features = VariableFeatures(sub_seurat)[1:1000],
+                                        selection.method = "moransi", x.cuts = 100, y.cuts = 100, verbose = F)
+  df <- sub_seurat@assays$SCT@meta.features %>%
+        rownames_to_column("gene") %>%
+        mutate(SampleID = x) %>%
+        dplyr::filter(!is.na(moransi.spatially.variable)) %>%
+        dplyr::arrange(moransi.spatially.variable.rank)
+  
+  return(df)
+}))
+
+top_spat_var_feats <- spat_var_feats %>%
+                        group_by(gene) %>%
+                        mutate(n_samples = n_distinct(SampleID)) %>%
+                        ungroup() %>%
+                        dplyr::filter(n_samples == n_distinct(SampleID)) %>%
+                        group_by(gene) %>%
+                        mutate(mean_rank = mean(moransi.spatially.variable.rank)) %>%
+                        ungroup() %>%
+                        dplyr::filter(mean_rank < 100) %>%
+                        dplyr::arrange(mean_rank) %>%
+                        dplyr::select(gene, mean_rank) %>%
+                        unique()
+
+if(knitr::is_html_output()){
+  datatable(top_spat_var_feats,
+                        caption = "Top spatially variable features",
+                        extensions = 'Buttons',
+                          options = list(dom = 'lfrtpB',
+                                         buttons = list(
+                                                      list(extend = 'csv', title = "spatially_variable_feats_across_samples"),
+                                                      list(extend = 'excel', title = "spatially_variable_feats_across_samples")),
+                                         lengthMenu = list(c(10,25,50,-1),
+                                                           c(10,25,50,"All")))) 
+  
+  
+} 
+
+```
+
+## Key variable markers
+```{r fig.height=8}
+
+selected_var_features <- c(params$selected_var_features)
+spat_varfeat_plot <- lapply(selected_var_features,  function(y){
+  out <- lapply(split(names(seurat@images), ceiling(seq_along(names(seurat@images))/ 2)), function(x){
+          p <- SpatialFeaturePlot(seurat, features = y, alpha = 0.9, pt.size.factor = 2, max.cutoff = "q95")  + theme(legend.position = "none")
+    return(p)
+  })
+  return(out)
+})
+
+spat_varfeat_plot
+
+
+
+```

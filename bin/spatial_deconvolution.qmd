@@ -1,0 +1,191 @@
+---
+params:
+  seurat: "/home/adampelletier/Documents/AWS_pipelines/nextflow/spatial_downstream/results/NHP_lung/seurat/seurat_clustered.RDS"
+  pipeline: "rna"
+  integrate_datasets: true
+  deconvolution_method: "RCTD"
+  rctd_ref: "none"
+  ref_ident: "cell_type"
+  outcomes: "none"
+
+---
+
+# Spatial Deconvolution
+
+Given that individual spots on a Visium slide are approximately 50uM in diameter, more than one cell is likely quantified on any given spot, with plausibly different cell types. 
+Therefore, the goal of transcriptomic deconvolution is to separate the signal into individual subcomponents corresponding to distinct cell states (i.e. cell types, activation level, etc). 
+```{r setup, warning=F, message=F, echo=knitr::is_html_output(), eval=T}
+
+selected_packages <- c("Seurat",
+                       'tidyverse',
+                       'readxl',
+                       'patchwork',
+                       'spacexr',
+                       'STdeconvolve',
+                       'DT',
+                       'future')
+#invisible(extrafont::font_import(prompt = F))
+selected_font <- "Arial"
+selected_font_pdf <- "ArialMT"
+#extrafont::loadfonts(device = "win")
+invisible(lapply(selected_packages, library, character.only = TRUE))
+
+if(knitr::is_html_output()){
+  eval_set <- TRUE
+  eval_pdf <- FALSE
+  echo_set <- TRUE
+  message_set <- FALSE
+} else {
+  eval_set <- FALSE
+  eval_pdf <- TRUE
+  echo_set <- FALSE
+  message_set <- FALSE
+}
+
+plan('multicore')
+source("run_funcs.R")
+
+options(future.globals.maxSize = 8000 * 1024^2)
+knitr::opts_chunk$set(echo = echo_set,  warning = FALSE, message = FALSE, fig.align = "center", eval = params$eval, fig.width = 10, cache.lazy = F)
+
+```
+
+```{r echo=F}
+
+run_gex <- TRUE
+
+run_adt <- FALSE
+
+multimodal <- FALSE
+
+
+if(params$pipeline == "rna"){
+  reduction_sel <- 'umap.rna'
+  clust_reduction <- 'pca'
+  if(params$integrate_datasets){
+    reduction_sel <- 'umap.rna.int'
+    clust_reduction <- 'integrated.rna'
+  }
+}
+
+if(params$pipeline == "cite"){
+  multimodal <- TRUE
+  run_adt <- TRUE
+  reduction_sel <- "wnn.umap"
+  clust_reduction <- 'weighted.nn'
+}
+
+if(params$deconvolution_method == "RCTD" & file.exists(params$rctd_ref)){
+  run_rctd <- TRUE
+  run_std <- FALSE
+} else {
+  run_rctd <- FALSE
+  #run_std <- TRUE
+  run_std <- FALSE
+}
+
+
+```
+
+## Analysis Parameters
+```{r echo=FALSE}
+
+df <- params_to_df(params)
+df
+```
+
+## Load Data
+```{r }
+seurat <- readRDS(params$seurat)
+
+```
+
+## Cell type classical markers
+Let's first explore the spatial localization of classical markers in the tissues qualitatively
+```{r fig.height=8}
+
+
+
+
+# spat_marker_plot <- sapply(c("CD14", "ITGAX", "ITGAM","CD3E", "IGHM" , 'CD8A'), simplify = F, USE.NAMES = T, function(y){
+#   out <- lapply(split(names(seurat@images), ceiling(seq_along(names(seurat@images))/ 2)), function(x){
+#           p <- SpatialFeaturePlot(seurat, features = y, alpha = 0.9, pt.size.factor = 2, max.cutoff = "q95")  + theme(legend.position = "none")
+#     return(p)
+#   })
+#   return(out)
+# })
+# 
+# spat_marker_plot
+
+make_image_features_combs <- function(seurat, features){
+  imageLS <- unlist(lapply(split(names(seurat@images), ceiling(seq_along(names(seurat@images))/ 2)), function(x){
+                    paste(x, collapse = "!")
+                    }), use.names = F)
+  df <- expand.grid(imageLS, features) %>%
+        dplyr::rename(feature = "Var2") %>%
+        tidyr::separate(Var1, sep = "!", into = c("image1", "image2"))
+  return(df)
+}
+
+cell_markers <- c("CD14", "ITGAX", "ITGAM","CD3E", "IGHM" , 'CD8A')
+#cell_markers <- c("CD14", "ITGAX" , 'CD8A')
+
+iter_vec <- make_image_features_combs(seurat, cell_markers)
+
+
+for(i in seq(1, dim(iter_vec)[1])){
+ print(SpatialFeaturePlot(seurat, features = as.character(iter_vec[i,3]), alpha = 0.9, pt.size.factor = 2, max.cutoff = "q95", 
+                                images = c(iter_vec[i,1], iter_vec[i,2]))  + theme(legend.position = "none"))
+  
+}
+
+
+
+
+
+```
+
+`r if(run_rctd){"### Robust Cell Type Deconvolution (RCTD)"}`
+```{r eval=run_rctd, echo=run_rctd & echo_set}
+ref <- readRDS(params)
+ref <- UpdateSeuratObject(ref)
+Idents(ref) <- params$ref_ident
+
+counts <- ref[["RNA"]]$counts
+cluster <- as.factor(ref$celltype)
+names(cluster) <- colnames(ref)
+nUMI <- ref$nCount_RNA
+names(nUMI) <- colnames(ref)
+reference <- Reference(counts, cluster, nUMI)
+
+
+counts <- seurat[["Spatial"]]$counts
+coords <- GetTissueCoordinates(seurat)
+colnames(coords) <- c("x", "y")
+coords[is.na(colnames(coords))] <- NULL
+query <- SpatialRNA(coords, counts, colSums(counts))
+
+
+RCTD <- create.RCTD(query, reference, max_cores = 8)
+RCTD <- run.RCTD(RCTD, doublet_mode = "full")
+
+seurat <- AddMetaData(seurat, metadata = RCTD@results$results_df)
+```
+
+```{r echo=F}
+std_blurb <- "### STdeconvolve\nSTdeconvolve is a reference-free method for spatial spot deconvolution. "
+
+
+```
+
+`r if(run_std){std_blurb}`
+```{r eval=run_std, echo=run_std & echo_set}
+
+
+```
+
+
+```{r }
+saveRDS(seurat, file = "seurat_annotated.RDS")
+
+```

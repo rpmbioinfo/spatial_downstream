@@ -1,0 +1,123 @@
+---
+params:
+  seurat: "/home/adampelletier/Documents/AWS_pipelines/nextflow/spatial_downstream/results/NHP_lung/seurat/seurat_after_qc.RDS"
+  pipeline: "rna"
+  umap_ndims: 30
+---
+
+# Dimension reduction
+```{r setup, warning=F, message=F, echo=knitr::is_html_output(), eval=T}
+
+selected_packages <- c("Seurat",
+                       'tidyverse',
+                       'readxl',
+                       'patchwork',
+                       'clustree',
+                       'glmGamPoi',
+                       'future')
+#invisible(extrafont::font_import(prompt = F))
+selected_font <- "Arial"
+selected_font_pdf <- "ArialMT"
+#extrafont::loadfonts(device = "win")
+invisible(lapply(selected_packages, library, character.only = TRUE))
+
+if(knitr::is_html_output()){
+  eval_set <- TRUE
+  eval_pdf <- FALSE
+  echo_set <- TRUE
+  message_set <- FALSE
+} else {
+  eval_set <- FALSE
+  eval_pdf <- TRUE
+  echo_set <- FALSE
+  message_set <- FALSE
+}
+
+source("run_funcs.R")
+
+
+knitr::opts_chunk$set(echo = echo_set,  warning = FALSE, message = FALSE, fig.align = "center", eval = params$eval, fig.width = 10, cache.lazy = F)
+options(future.globals.maxSize = 8000 * 1024^2)
+```
+
+```{r echo=F}
+
+
+run_gex <- TRUE
+run_adt <- FALSE
+
+
+if(params$pipeline == "cite"){
+  run_adt <- TRUE
+}
+
+```
+
+## Analysis Parameters
+```{r echo=FALSE}
+
+df <- params_to_df(params)
+df
+```
+
+## Load Data
+```{r }
+seurat <- readRDS(params$seurat)
+
+```
+
+## Normalization and dimension reduction
+
+### Gene Expression dimension reduction
+```{r rna_dim, echo=run_gex & echo_set, eval=run_gex, results='asis'}
+
+
+DefaultAssay(seurat) <- "Spatial"
+
+
+seurat <- SCTransform(seurat, verbose = FALSE, assay = "Spatial", ncells = 3000) 
+
+DefaultAssay(seurat) <- "SCT"
+seurat <- RunPCA(seurat, reduction.name = 'pca', assay = "SCT") 
+seurat <- FindNeighbors(seurat, dims = 1:params$umap_ndims, reduction.name = 'pca', assay = "SCT", verbose = F)
+
+
+
+VizDimLoadings(seurat, dims = 1:2, reduction = "pca") + ggtitle("Top RNA Variable Features from PC1 and PC2")
+
+ElbowPlot(seurat, ndims = 30) + ggtitle("RNA Elbow Plot to isolate optimal number of dimensions") + geom_vline(xintercept = params$umap_ndims, color = "red", lty = 3)
+
+cat("Workflow has the number of dimensions set to", params$umap_ndims, ". Make sure this value is supported by the Elbow Plot or adjust in the config file accordingly.")
+
+reduction_name_rna <- 'umap.rna'
+seurat <- RunUMAP(seurat, dims = 1:params$umap_ndims, reduction.name = reduction_name_rna, reduction.key = "rnaUMAP_")
+
+DimPlot(seurat, group.by = 'SampleID', label = T, repel = T, raster = T) + NoLegend()
+```
+
+
+`r if(run_adt){"### Protein dimension reduction"}`
+```{r echo=run_adt & echo_set, eval=run_adt, results='asis'}
+
+DefaultAssay(seurat) <- "ADT"
+
+seurat <-  NormalizeData(seurat, normalization.method = 'CLR', margin = 2) %>%
+            ScaleData() %>% 
+            RunPCA(reduction.name = 'apca')
+
+ElbowPlot(seurat, reduction = 'apca', ndims = 30)
+
+
+reduction_name_adt <- 'apca'
+seurat <- RunUMAP(seurat, reduction = 'apca', dims = 1:15, assay = 'ADT', 
+              reduction.name = 'umap.adt', reduction.key = 'adtUMAP_')
+
+
+DimPlot(seurat, group.by = 'SampleID', label = T, repel = T, raster = T) + NoLegend()
+```
+
+
+```{r }
+saveRDS(seurat, file = "seurat_dim_reduced.RDS")
+
+```

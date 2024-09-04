@@ -1,0 +1,119 @@
+---
+params:
+  seurat: "/home/adampelletier/Documents/AWS_pipelines/nextflow/spatial_downstream/results/NHP_lung/seurat/seurat_clustered.RDS"
+  pipeline: "rna"
+  integrate_datasets: true
+  clustering_res_granulomas: 0.5
+  cluster_selection: ['1', '2']
+
+---
+
+# Clustering
+
+```{r setup, warning=F, message=F, echo=knitr::is_html_output(), eval=T}
+
+selected_packages <- c("Seurat",
+                       'tidyverse',
+                       'readxl',
+                       'patchwork',
+                       'clustree', 
+                       'DT',
+                       'ggpubr',
+                       'Rfast2')
+#invisible(extrafont::font_import(prompt = F))
+selected_font <- "Arial"
+selected_font_pdf <- "ArialMT"
+#extrafont::loadfonts(device = "win")
+invisible(lapply(selected_packages, library, character.only = TRUE))
+
+if(knitr::is_html_output()){
+  eval_set <- TRUE
+  eval_pdf <- FALSE
+  echo_set <- TRUE
+  message_set <- FALSE
+} else {
+  eval_set <- FALSE
+  eval_pdf <- TRUE
+  echo_set <- FALSE
+  message_set <- FALSE
+}
+
+source("run_funcs.R")
+
+options(future.globals.maxSize = 8000 * 1024^2)
+knitr::opts_chunk$set(echo = echo_set,  warning = FALSE, message = FALSE, fig.align = "center", eval = params$eval, fig.width = 10, cache.lazy = F)
+
+```
+
+```{r echo=F}
+
+run_gex <- TRUE
+
+run_adt <- FALSE
+
+multimodal <- FALSE
+
+
+if(params$pipeline == "rna"){
+  reduction_sel <- 'umap.rna'
+  clust_reduction <- 'pca'
+  if(params$integrate_datasets){
+    reduction_sel <- 'umap.rna.int'
+    clust_reduction <- 'integrated.rna'
+  }
+}
+
+if(params$pipeline == "cite"){
+  multimodal <- TRUE
+  run_adt <- TRUE
+  reduction_sel <- "wnn.umap"
+  clust_reduction <- 'weighted.nn'
+}
+
+
+```
+
+## Analysis Parameters
+```{r echo=FALSE}
+
+df <- params_to_df(params)
+df
+```
+
+### Load Data
+```{r }
+seurat <- readRDS(params$seurat)
+
+```
+
+## Subset granuloma clusters
+In order to better separate necrotic from non-necrotic granulomas, the clusetrs associated with granulomas and their immediate vicinity are subsetted to reperform dimension reduction and clustering. 
+```{r }
+
+seurat$seurat_clusters <- seurat$SCT_snn_res.0.4
+
+clust_sel <- c('5' ,'1', '6')
+
+SpatialDimPlot(subset(seurat, subset = seurat_clusters %in% clust_sel), group.by = "seurat_clusters", pt.size.factor = 2)
+SpatialDimPlot(seurat, group.by = "seurat_clusters", pt.size.factor = 2)
+DimPlot(subset(seurat, subset = seurat_clusters %in% clust_sel), group.by = "seurat_clusters", split.by = "SampleID", reduction = "umap.rna.int")
+
+
+
+# test <- GetTissueCoordinates(seurat) %>%
+#           left_join(seurat@meta.data %>% 
+#                       rownames_to_column("cell") %>%
+#                       dplyr::select(cell, SampleID), by = "cell") %>%
+#           group_by(SampleID) %>%
+#           summarise(max = max(y))
+#           mutate(keep = ifelse(SampleID == "p24125-s001_A-21-0817-13" & y))
+
+seurat <- subset(seurat, subset = seurat$clusters %in% params$cluster_selection)
+
+
+imageLS <- unlist(lapply(split(names(seurat@images), ceiling(seq_along(names(seurat@images))/ 2)), function(x){
+  paste(x, collapse = "!")
+}), use.names = F)
+
+
+```
