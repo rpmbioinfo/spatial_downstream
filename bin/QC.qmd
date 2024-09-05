@@ -1,6 +1,5 @@
 ---
 params:
-  eval: true
   pipeline: "rna"
   metadata: "/home/adampelletier/Documents/RPM_Bioinfo_scripts/Ashish/hadiya_visium/mtb_visium/mtb_visium_metadata.xlsx"
   genome: "GRCh38"
@@ -8,7 +7,7 @@ params:
   nCount_Spatial_max: 25000
   nFeature_Spatial_min: 1000
   nFeature_Spatial_max: 2500
-  sample_exclusion: ""
+  sample_exclusion: [""]
 ---
 
 
@@ -43,7 +42,7 @@ source("run_funcs.R")
 plotLS <- list()
 
 
-knitr::opts_chunk$set(echo = echo_set,  warning = FALSE, message = FALSE, fig.align = "center", eval = params$eval, fig.width=9)
+knitr::opts_chunk$set(echo = echo_set,  warning = FALSE, message = FALSE, fig.align = "center", eval = TRUE, fig.width=9)
 
 ```
 
@@ -65,6 +64,8 @@ if(params$pipeline == "cite"){
 df <- params_to_df(params)
 
 df
+
+
 ```
 
 ## Load Data
@@ -103,7 +104,8 @@ if(ext %in% c("xls", "xlsx")){
 
 
 if("SampleID" %in% colnames(meta_df)){
-  if(length(setdiff(unique(seurat$SampleID), meta_df$SampleID)) == 0){
+  missing_samples <- setdiff(unique(seurat$SampleID), meta_df$SampleID)
+  if(length(missing_samples) == 0){
       tmp_meta <- seurat@meta.data %>%
               rownames_to_column("cell") %>%
               dplyr::select(cell, SampleID) %>%
@@ -111,7 +113,7 @@ if("SampleID" %in% colnames(meta_df)){
               column_to_rownames("cell")
     seurat <- AddMetaData(seurat, metadata = tmp_meta)
   } else {
-    stop("Metadata does not contain rows for all SampleIDs found in the Seurat object.")
+    stop(paste0("Metadata does not contain rows for SampleIDs", paste(sQuote(missing_samples), collapse = ";"),  " found in the Seurat object."))
   }
 
 } else {
@@ -182,7 +184,12 @@ qc_metric_plots$nCount_Spatial
 
 ```{r fig.width=12, fig.height=8}
 for(x in split(names(seurat@images), ceiling(seq_along(names(seurat@images))/ 2))){
-  print(SpatialFeaturePlot(seurat, images = x, features = "nCount_Spatial", max.cutoff = "q95", min.cutoff = "q5", pt.size.factor = 2))
+  if(length(x) == 2){
+     print(SpatialFeaturePlot(seurat, images = x, features = "nCount_Spatial", max.cutoff = "q95", min.cutoff = "q5", pt.size.factor = 2))
+  } else {
+     print(SpatialFeaturePlot(seurat, images = x, features = "nCount_Spatial", max.cutoff = "q95", min.cutoff = "q5", pt.size.factor = 2)) + ggtitle(x)
+  }
+ 
   
 }
 
@@ -200,8 +207,12 @@ qc_metric_plots$nFeature_Spatial
 
 ```{r fig.width=12, fig.height=8}
 for(x in split(names(seurat@images), ceiling(seq_along(names(seurat@images))/ 2))){
-  print(SpatialFeaturePlot(seurat, images = x, features = "nFeature_Spatial", max.cutoff = "q95", min.cutoff = "q5", pt.size.factor = 2))
-  
+  if(length(x) == 2){
+     print(SpatialFeaturePlot(seurat, images = x, features = "nFeature_Spatial", max.cutoff = "q95", min.cutoff = "q5", pt.size.factor = 2))
+  } else {
+     print(SpatialFeaturePlot(seurat, images = x, features = "nFeature_Spatial", max.cutoff = "q95", min.cutoff = "q5", pt.size.factor = 2)) + ggtitle(x)
+  }
+ 
 }
 
 ```

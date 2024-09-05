@@ -42,7 +42,7 @@ plan('multicore')
 source("run_funcs.R")
 
 options(future.globals.maxSize = 8000 * 1024^2)
-knitr::opts_chunk$set(echo = echo_set,  warning = FALSE, message = FALSE, fig.align = "center", eval = params$eval, fig.width = 10, cache.lazy = F)
+knitr::opts_chunk$set(echo = echo_set,  warning = FALSE, message = FALSE, fig.align = "center", eval = TRUE, fig.width = 10, cache.lazy = F)
 
 ```
 
@@ -164,7 +164,7 @@ DefaultAssay(seurat) <- 'SCT'
 
 if(length(seurat@assays$SCT@SCTModel.list) == 2){
   slot(object = seurat@assays$SCT@SCTModel.list[[2]], name="umi.assay")<-"Spatial"
-} else {
+} else if(length(seurat@assays$SCT@SCTModel.list) > 2){
   for(i in seq(2,length(seurat@assays$SCT@SCTModel.list))){
     slot(object = seurat@assays$SCT@SCTModel.list[[i]], name="umi.assay")<-"Spatial"
   }

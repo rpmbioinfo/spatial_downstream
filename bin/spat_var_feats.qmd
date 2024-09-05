@@ -41,7 +41,7 @@ plan('multicore')
 source("run_funcs.R")
 
 options(future.globals.maxSize = 8000 * 1024^2)
-knitr::opts_chunk$set(echo = echo_set,  warning = FALSE, message = FALSE, fig.align = "center", eval = params$eval, fig.width = 10, cache.lazy = F)
+knitr::opts_chunk$set(echo = echo_set,  warning = FALSE, message = FALSE, fig.align = "center", eval = TRUE, fig.width = 10, cache.lazy = F)
 
 ```
 

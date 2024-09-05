@@ -11,10 +11,10 @@ params_to_df <- function(params){
       }
     }
   }
-  #return(ls)
+
   df <- data.frame("parameter" = names(ls),
-                   "argument" = unlist(ls, use.names = F)) %>%
-    dplyr::filter(argument != "")
+                   "argument" = unlist(ls, use.names = F)) #%>%
+    #dplyr::filter(argument != "")
   return(knitr::kable(df))
 }
 

@@ -36,7 +36,7 @@ if(knitr::is_html_output()){
 source("run_funcs.R")
 
 
-knitr::opts_chunk$set(echo = echo_set,  warning = FALSE, message = FALSE, fig.align = "center", eval = params$eval, fig.width = 10, cache.lazy = F)
+knitr::opts_chunk$set(echo = echo_set,  warning = FALSE, message = FALSE, fig.align = "center", eval = TRUE, fig.width = 10, cache.lazy = F)
 options(future.globals.maxSize = 8000 * 1024^2)
 ```
 
