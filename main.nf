@@ -1,6 +1,11 @@
+#!/usr/bin/env nextflow
 import groovy.json.JsonOutput
 
-book_assets = channel.fromPath( 'assets/book_assets/*').collect()
+nextflow.enable.dsl = 2
+
+params.help      = false
+
+
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     IMPORT MODULES / SUBWORKFLOWS / FUNCTIONS
@@ -28,8 +33,6 @@ include { BOOK_RENDER } from './modules/render.nf'
 */
 
 
-scripts_ch = channel.fromPath("bin/*")
-             .collect()
 
 
 workflow {
@@ -43,6 +46,22 @@ workflow {
         params.input,
         params.pipeline
     )
+
+
+    book_assets = channel.fromPath( 'assets/book_assets/*')
+                .mix(channel.fromPath(params.logo))
+                .mix(channel.fromPath(params.quarto_index))
+                .mix(channel.fromPath(params.quarto_yml))
+                .collect()
+
+
+    scripts_ch = channel.fromPath("bin/*")
+             .collect()
+
+
+    params.mito_regex = getGenomeAttribute('mito_regex')
+    params.ribo_regex = getGenomeAttribute('ribo_regex')
+
 
     Channel.fromPath(  "${params.input}/**/outs/filtered_*bc_matrix.h5", checkIfExists : true )
     | map { it -> tuple( it.parent.parent.name, it)}
@@ -81,7 +100,7 @@ workflow {
         | set { seurat_combined_ch}
     }
 
-   
+   book_assets.view()
 
 
     QUALITY_CONTROL(seurat_combined_ch,
@@ -223,4 +242,14 @@ workflow {
 
 workflow.onComplete {
     log.info ( workflow.success ? "\nDone!" : "Oops .. something went wrong" )
+}
+
+
+def getGenomeAttribute(attribute) {
+    if (params.genomes && params.genome && params.genomes.containsKey(params.genome)) {
+        if (params.genomes[ params.genome ].containsKey(attribute)) {
+            return params.genomes[ params.genome ][ attribute ]
+        }
+    }
+    return null
 }
