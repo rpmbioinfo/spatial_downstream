@@ -3,7 +3,7 @@ process BOOK_RENDER {
     stageInMode 'copy'
 
     publishDir "$params.outdir/book", mode:'copy', pattern: "_book/*"
-
+    publishDir "$params.outdir/book", mode:'copy', pattern: "report.zip"
 
     memory '16 GB'
     cpus 1
@@ -17,6 +17,7 @@ process BOOK_RENDER {
 
     output:
     path "_book/*"
+    path "report.zip"
 
 
     script:
@@ -24,6 +25,7 @@ process BOOK_RENDER {
     unzip -o '*.zip'
     Rscript filter_yaml.R
     quarto render index.qmd
+    zip -r report.zip _book
     """
 
 }
