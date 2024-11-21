@@ -1,6 +1,12 @@
 import groovy.json.JsonOutput
 
 book_assets = channel.fromPath( 'assets/book_assets/*').collect()
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    IMPORT MODULES / SUBWORKFLOWS / FUNCTIONS
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+*/
+include { PIPELINE_INITIALISATION } from './subworkflows/local/pipeline_init'
 
 include { QUALITY_CONTROL } from './modules/qc.nf'
 include { PACKAGE_IMAGES } from './modules/create_seurat.nf'
@@ -15,12 +21,28 @@ include { SPOT_DECONVOLUTION } from './modules/spot_deconvolution.nf'
 include { ISOLATE_GRANULOMAS } from './modules/isolate_granulomas.nf'
 include { BOOK_RENDER } from './modules/render.nf'
 
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    RUN MAIN WORKFLOW
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+*/
+
 
 scripts_ch = channel.fromPath("bin/*")
              .collect()
 
 
 workflow {
+    PIPELINE_INITIALISATION (
+        params.version,
+        params.help,
+        params.validate_params,
+        params.monochrome_logs,
+        args,
+        params.outdir,
+        params.input,
+        params.pipeline
+    )
 
     Channel.fromPath(  "${params.input}/**/outs/filtered_*bc_matrix.h5", checkIfExists : true )
     | map { it -> tuple( it.parent.parent.name, it)}
@@ -77,81 +99,86 @@ workflow {
     quarto_ch = qc_ch.quarto
 
    
-
-    DIMENSION_REDUCTION(qc_ch.seurat,
+    if (!['QC', "qc"].contains(params.stop_after)) {
+        DIMENSION_REDUCTION(qc_ch.seurat,
                        params.dimreduc_script,
                        book_assets,
                        params.pipeline,
                        params.umap_ndims)
-    | set {umap_ch }
-    quarto_ch = quarto_ch.concat(umap_ch.quarto)
-    
-    
-    if (params.integrate_datasets ) {
-        INTEGRATE_DATASETS(umap_ch.seurat,
-                        params.int_script,
-                        book_assets,
-                        params.pipeline,
-                        params.integrate_datasets,
-                        params.integration_method,
-                        params.integrate_by,
-                        params.view_batch,
-                        params.umap_ndims)
-        | set { int_ch }
-        quarto_ch = quarto_ch.concat(int_ch.quarto)
-        
-    } else {
-        int_ch = umap_ch
-    }
+        | set {umap_ch }
+        quarto_ch = quarto_ch.concat(umap_ch.quarto)
 
 
-    if (params.pipeline == 'cite') {
-        MULTIMODAL_INTEGRATION(int_ch.seurat,
-                            params.int_multimod_script,
+    } 
+    
+    
+    if (!['QC', "DR", 'qc', 'dr'].contains(params.stop_after)) {
+        if (params.integrate_datasets ) {
+            INTEGRATE_DATASETS(umap_ch.seurat,
+                            params.int_script,
                             book_assets,
                             params.pipeline,
-                            params.umap_ndims,
-                            params.integrate_datasets)
-        | set { intwnn_ch }
-        quarto_ch = quarto_ch.concat(intwnn_ch.quarto)
-        
-    } else {
-        intwnn_ch = int_ch
+                            params.integrate_datasets,
+                            params.integration_method,
+                            params.integrate_by,
+                            params.view_batch,
+                            params.umap_ndims)
+            | set { int_ch }
+            quarto_ch = quarto_ch.concat(int_ch.quarto)
+            
+        } else {
+            int_ch = umap_ch
+        }
     }
 
-    CLUSTERING(intwnn_ch.seurat,
-                params.clustering_script,
-                book_assets,
-                params.pipeline,
-                params.clustering_res,
-                params.integrate_datasets,
-                params.outcomes)
-    | set { cluster_ch }
+    if (!['QC', "DR", 'INT', 'qc', 'dr', 'int'].contains(params.stop_after)) {
+        if (params.pipeline == 'cite') {
+            MULTIMODAL_INTEGRATION(int_ch.seurat,
+                                params.int_multimod_script,
+                                book_assets,
+                                params.pipeline,
+                                params.umap_ndims,
+                                params.integrate_datasets)
+            | set { intwnn_ch }
+            quarto_ch = quarto_ch.concat(intwnn_ch.quarto)
+            
+        } else {
+            intwnn_ch = int_ch
+        }
 
-    quarto_ch = quarto_ch.concat(cluster_ch.quarto)
+        CLUSTERING(intwnn_ch.seurat,
+                    params.clustering_script,
+                    book_assets,
+                    params.pipeline,
+                    params.clustering_res,
+                    params.integrate_datasets,
+                    params.outcomes)
+        | set { cluster_ch }
 
+        quarto_ch = quarto_ch.concat(cluster_ch.quarto)
+    }
 
+    if (!['QC', "DR", 'INT', "CLUST", 'qc', 'dr', 'int', 'clust'].contains(params.stop_after) ) {
+        SPOT_DECONVOLUTION(cluster_ch.seurat,
+                            params.annotation_script,
+                            book_assets,
+                            params.pipeline,
+                            params.integrate_datasets)
+        | set { deconv_ch }
 
-    SPOT_DECONVOLUTION(cluster_ch.seurat,
-                        params.annotation_script,
-                        book_assets,
-                        params.pipeline,
-                        params.integrate_datasets)
-    | set { deconv_ch }
+        quarto_ch = quarto_ch.concat(deconv_ch.quarto)
 
-    quarto_ch = quarto_ch.concat(deconv_ch.quarto)
+               
+        SPATIAL_FEATURES(cluster_ch.seurat,
+                    params.spat_var_script,
+                    book_assets,
+                    params.pipeline,
+                    params.integrate_datasets,
+                    params.selected_var_features)
+        | set { spat_var_ch }
 
-   
-    SPATIAL_FEATURES(cluster_ch.seurat,
-                params.spat_var_script,
-                book_assets,
-                params.pipeline,
-                params.integrate_datasets,
-                params.selected_var_features)
-    | set { spat_var_ch }
-
-    quarto_ch = quarto_ch.concat(spat_var_ch.quarto)
-
+        quarto_ch = quarto_ch.concat(spat_var_ch.quarto)
+    }
     /*
     ISOLATE_GRANULOMAS(deconv_ch.seurat,
                         params.annotation_script,
